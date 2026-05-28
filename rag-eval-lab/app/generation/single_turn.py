@@ -27,7 +27,7 @@ from langchain_openai import ChatOpenAI
 from llama_index.core.schema import NodeWithScore
 
 from app.config.settings import Settings
-from app.tracing.langfuse import LangfuseTracer, get_langfuse_callback, get_langfuse_client
+from app.tracing.langfuse import LangfuseTracer, get_langfuse_callback, get_langfuse_client, get_safe_tracer
 from app.utils.logger import get_logger
 from app.utils.text import nodes_to_context_str
 
@@ -59,7 +59,7 @@ class SingleTurnGenerator:
             tracer: Optional LangfuseTracer instance.
         """
         self.settings = settings
-        self.tracer = tracer
+        self.tracer = get_safe_tracer(tracer)
 
         # 📚 LESSON — Pointing ChatOpenAI to custom endpoints:
         # Since the NVIDIA API is OpenAI-compatible (uses exact same JSON payloads),

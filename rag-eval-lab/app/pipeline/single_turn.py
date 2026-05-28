@@ -16,7 +16,7 @@ from app.generation.single_turn import SingleTurnGenerator
 from app.pipeline.base import BasePipeline, PipelineResult
 from app.retrieval.base import BaseRetriever
 from app.retrieval.reranker.base import BaseReranker
-from app.tracing.langfuse import LangfuseTracer
+from app.tracing.langfuse import LangfuseTracer, get_safe_tracer
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -49,7 +49,7 @@ class SingleTurnPipeline(BasePipeline):
         self.retriever = retriever
         self.generator = generator
         self.reranker = reranker
-        self.tracer = tracer
+        self.tracer = get_safe_tracer(tracer)
 
         logger.info(
             "SingleTurnPipeline initialized: retriever={ret}, reranker={rer}, tracer_enabled={trace}",

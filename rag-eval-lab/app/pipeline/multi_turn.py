@@ -23,7 +23,7 @@ from app.generation.multi_turn import MultiTurnGenerator
 from app.pipeline.base import BasePipeline, PipelineResult
 from app.retrieval.base import BaseRetriever
 from app.retrieval.reranker.base import BaseReranker
-from app.tracing.langfuse import LangfuseTracer
+from app.tracing.langfuse import LangfuseTracer, get_safe_tracer
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -56,7 +56,7 @@ class MultiTurnPipeline(BasePipeline):
         self.retriever = retriever
         self.generator = generator
         self.reranker = reranker
-        self.tracer = tracer
+        self.tracer = get_safe_tracer(tracer)
 
         # 📚 LESSON — Session Memory Storage:
         # We store the conversation history locally as a list of LangChain message objects.

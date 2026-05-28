@@ -16,7 +16,7 @@ from llama_index.core import VectorStoreIndex
 from llama_index.core.schema import NodeWithScore
 
 from app.retrieval.base import BaseRetriever
-from app.tracing.langfuse import LangfuseTracer
+from app.tracing.langfuse import LangfuseTracer, get_safe_tracer
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -43,7 +43,7 @@ class SparseRetriever(BaseRetriever):
         """
         self._index = index
         self._top_k = top_k
-        self._tracer = tracer
+        self._tracer = get_safe_tracer(tracer)
 
         # 📚 LESSON — LlamaIndex Sparse Query Mode:
         # We configure `vector_store_query_mode="sparse"`. This tells LlamaIndex to bypass

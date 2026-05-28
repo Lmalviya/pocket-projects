@@ -28,7 +28,7 @@ from llama_index.vector_stores.qdrant import QdrantVectorStore
 
 from app.config.settings import Settings
 from app.ingestion.indexing.sparse import SparseEncoder
-from app.tracing.langfuse import LangfuseTracer
+from app.tracing.langfuse import LangfuseTracer, get_safe_tracer
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -62,7 +62,7 @@ class QdrantHybridIndexer:
         self.stage = stage
         self.chunking_strategy = chunking_strategy.lower()
         self.sparse_strategy = sparse_strategy.lower()
-        self.tracer = tracer
+        self.tracer = get_safe_tracer(tracer)
 
         # 📚 LESSON — Dynamically Isolated Collections:
         # To avoid blending different experiment variables, we construct isolated collections.

@@ -103,12 +103,89 @@ def get_langfuse_callback() -> CallbackHandler:
     Returns:
         A Langfuse CallbackHandler for LangChain chains.
     """
-    settings = get_settings()
-    return CallbackHandler(
-        public_key=settings.langfuse_public_key,
-        secret_key=settings.langfuse_secret_key,
-        host=settings.langfuse_host,
-    )
+    # Ensure client singleton is initialized first so credentials are bound
+    get_langfuse_client()
+    return CallbackHandler()
+
+
+class SpanContext:
+    """
+    Unified context manager and direct update container for Langfuse spans.
+    Supports standard 'with' block usage and fallback direct update calls.
+    """
+
+    def __init__(
+        self,
+        client: Any,
+        name: str,
+        as_type: str,
+        input_data: dict[str, Any] | None,
+        full_metadata: dict[str, Any],
+        enabled: bool,
+    ) -> None:
+        self.client = client
+        self.name = name
+        self.as_type = as_type
+        self.input_data = input_data
+        self.full_metadata = full_metadata
+        self.enabled = enabled
+        self.observation = None
+        self.observation_ctx = None
+        self.start_time = None
+
+    def update(self, **kwargs: Any) -> SpanContext:
+        """
+        Dynamically updates the active span/observation with new payload parameters.
+        No-ops safely if tracing is disabled or the span has not been entered.
+        """
+        if not self.enabled or self.observation is None:
+            return self
+        try:
+            self.observation.update(**kwargs)
+        except Exception as e:
+            logger.warning("Failed to update span '{name}' (non-fatal): {err}", name=self.name, err=str(e))
+        return self
+
+    def __enter__(self) -> SpanContext:
+        if not self.enabled or self.client is None:
+            return self
+        try:
+            self.start_time = time.perf_counter()
+            self.observation_ctx = self.client.start_as_current_observation(
+                name=self.name,
+                as_type=self.as_type,
+                input=self.input_data or {},
+                metadata=self.full_metadata,
+            )
+            self.observation = self.observation_ctx.__enter__()
+        except Exception as e:
+            logger.warning("Failed to start span '{name}' (non-fatal): {err}", name=self.name, err=str(e))
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
+        if not self.enabled or self.observation_ctx is None:
+            return False
+        elapsed_ms = (time.perf_counter() - self.start_time) * 1000
+        try:
+            if exc_type is not None:
+                self.observation.update(
+                    level="ERROR",
+                    status_message=str(exc_val),
+                    metadata={**self.full_metadata, "latency_ms": round(elapsed_ms, 2)}
+                )
+            else:
+                self.observation.update(
+                    metadata={**self.full_metadata, "latency_ms": round(elapsed_ms, 2)}
+                )
+        except Exception as e:
+            logger.warning("Failed to update span metadata '{name}' (non-fatal): {err}", name=self.name, err=str(e))
+
+        # Exit the underlying OTel/Langfuse context manager
+        try:
+            self.observation_ctx.__exit__(exc_type, exc_val, exc_tb)
+        except Exception as e:
+            logger.warning("Failed to close underlying span '{name}' (non-fatal): {err}", name=self.name, err=str(e))
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -154,21 +231,16 @@ class LangfuseTracer:
         self.enabled = enabled
         self._client = get_langfuse_client() if enabled else None
 
-    @contextmanager
     def span(
         self,
         name: str,
         input: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
         as_type: str = "span",
-    ) -> Generator:
+    ) -> SpanContext:
         """
-        Context manager that creates a named Langfuse span.
-
-        📚 LESSON — Context managers for spans:
-          Using `with tracer.span("name"):` instead of manual start/end
-          guarantees the span is ALWAYS ended, even if an exception occurs.
-          This prevents "orphaned" spans in Langfuse that never close.
+        Creates a named Langfuse SpanContext that can be used either as a 
+        standard context manager ('with') or as a fallback direct-call container.
 
         Args:
             name: Span name (e.g., "chunking.fixed", "retrieval.dense").
@@ -176,48 +248,21 @@ class LangfuseTracer:
             metadata: Extra context (config, sizes, etc.).
             as_type: Observation type — "span" | "generation" | "retriever".
 
-        Yields:
-            The active span object (call .update() on it for live updates).
+        Returns:
+            The active SpanContext object.
         """
-        if not self.enabled or self._client is None:
-            yield None
-            return
-
         full_metadata = {
             "experiment_name": self.experiment_name,
             **(metadata or {}),
         }
-
-        try:
-            with self._client.start_as_current_observation(
-                name=name,
-                as_type=as_type,
-                input=input or {},
-                metadata=full_metadata,
-            ) as observation:
-                start = time.perf_counter()
-                try:
-                    yield observation
-                    elapsed_ms = (time.perf_counter() - start) * 1000
-                    # Update span with timing info after the block completes
-                    if observation:
-                        observation.update(
-                            metadata={**full_metadata, "latency_ms": round(elapsed_ms, 2)}
-                        )
-                except Exception as e:
-                    elapsed_ms = (time.perf_counter() - start) * 1000
-                    if observation:
-                        observation.update(
-                            level="ERROR",
-                            status_message=str(e),
-                            metadata={**full_metadata, "latency_ms": round(elapsed_ms, 2)},
-                        )
-                    raise
-
-        except Exception as sdk_err:
-            # If the Langfuse SDK itself fails, log and continue — NEVER crash the app
-            logger.warning("Langfuse span '{name}' failed (non-fatal): {err}", name=name, err=str(sdk_err))
-            yield None
+        return SpanContext(
+            client=self._client,
+            name=name,
+            as_type=as_type,
+            input_data=input,
+            full_metadata=full_metadata,
+            enabled=self.enabled,
+        )
 
     def set_trace_io(
         self,
@@ -286,3 +331,69 @@ class LangfuseTracer:
                 logger.debug("Langfuse flush complete")
             except Exception as e:
                 logger.warning("Langfuse flush failed: {err}", err=str(e))
+
+
+class NoOpTracer:
+    """
+    A tracer that implements the LangfuseTracer interface but does absolutely nothing.
+    This serves as a safe fallback (Null Object pattern) to prevent AttributeError
+    and remove boilerplate 'if tracer' guards across the codebase.
+    """
+
+    def __init__(self) -> None:
+        self.experiment_name = "noop"
+        self.enabled = False
+
+    def span(
+        self,
+        name: str,
+        input: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+        as_type: str = "span",
+    ) -> SpanContext:
+        return SpanContext(
+            client=None,
+            name=name,
+            as_type=as_type,
+            input_data=input,
+            full_metadata={},
+            enabled=False,
+        )
+
+    def set_trace_io(
+        self,
+        input: dict[str, Any] | None = None,
+        output: dict[str, Any] | None = None,
+    ) -> None:
+        pass
+
+    def get_trace_url(self) -> str | None:
+        return None
+
+    def get_trace_id(self) -> str | None:
+        return None
+
+    def flush(self) -> None:
+        pass
+
+
+_noop_tracer = None
+
+
+def get_safe_tracer(tracer: Any = None) -> LangfuseTracer | NoOpTracer:
+    """
+    Safely resolves a tracer instance.
+    If the provided tracer is a valid LangfuseTracer, returns it.
+    Otherwise, returns a NoOpTracer instance.
+    This guarantees that components can always call tracer.span() without checking for None
+    or encountering type/attribute errors.
+    """
+    global _noop_tracer
+    if isinstance(tracer, LangfuseTracer):
+        return tracer
+    if tracer is not None and hasattr(tracer, "span") and callable(tracer.span):
+        return tracer
+    if _noop_tracer is None:
+        _noop_tracer = NoOpTracer()
+    return _noop_tracer
+

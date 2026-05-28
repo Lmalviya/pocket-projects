@@ -106,6 +106,13 @@ class Settings(BaseSettings):
         description="Cohere API key for Cohere Rerank (optional)",
     )
 
+    # ── Hugging Face (optional) ───────────────────────────────────────────────
+    hf_token: str | None = Field(
+        alias="HF_TOKEN",
+        default=None,
+        description="Hugging Face API token for authenticated downloads and higher rate limits (optional)",
+    )
+
     # ── Application ───────────────────────────────────────────────────────────
     experiment_config_path: str = Field(
         default="app/config/experiment.yaml",
@@ -136,4 +143,8 @@ def get_settings() -> Settings:
     for settings — simple, thread-safe, and testable (you can clear the
     cache in tests with get_settings.cache_clear()).
     """
-    return Settings()
+    settings = Settings()
+    if settings.hf_token:
+        import os
+        os.environ["HF_TOKEN"] = settings.hf_token
+    return settings

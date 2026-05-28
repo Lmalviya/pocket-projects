@@ -41,7 +41,7 @@ from typing import Any
 
 from llama_index.core.schema import Document, TextNode
 
-from app.tracing.langfuse import LangfuseTracer
+from app.tracing.langfuse import LangfuseTracer, get_safe_tracer
 from app.utils.logger import get_logger
 
 # NOTE: chunkers use tracer.span() context manager directly (Langfuse v4 API)
@@ -125,7 +125,7 @@ class BaseChunker(ABC):
             trace: Optional active Langfuse trace to attach spans to.
         """
         self.config = config
-        self.tracer = tracer
+        self.tracer = get_safe_tracer(tracer)
         self._trace = trace
 
     @property

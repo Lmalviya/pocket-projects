@@ -18,7 +18,7 @@ from sentence_transformers import CrossEncoder
 from llama_index.core.schema import NodeWithScore
 
 from app.retrieval.reranker.base import BaseReranker
-from app.tracing.langfuse import LangfuseTracer
+from app.tracing.langfuse import LangfuseTracer, get_safe_tracer
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -45,7 +45,7 @@ class CrossEncoderReranker(BaseReranker):
         """
         self._model_name = model_name
         self._top_k = top_k
-        self._tracer = tracer
+        self._tracer = get_safe_tracer(tracer)
 
         logger.info("Loading Cross-Encoder model '{name}'...", name=model_name)
         try:

@@ -24,7 +24,7 @@ from app.retrieval.base import BaseRetriever
 from app.retrieval.dense import DenseRetriever
 from app.retrieval.sparse import SparseRetriever
 from app.retrieval.utils import reciprocal_rank_fusion
-from app.tracing.langfuse import LangfuseTracer
+from app.tracing.langfuse import LangfuseTracer, get_safe_tracer
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -53,7 +53,7 @@ class HybridRetriever(BaseRetriever):
         """
         self._top_k = top_k
         self._rrf_k = rrf_k #hyper-parameter
-        self._tracer = tracer
+        self._tracer = get_safe_tracer(tracer)
 
         # 📚 LESSON — Candidate Oversampling for Fusion:
         # When merging candidate lists, we fetch `top_k * 2` items from each individual
