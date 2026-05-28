@@ -1,0 +1,81 @@
+[project]
+name = "rag-eval-lab"
+version = "0.1.0"
+description = "A multi-phase RAG experimentation lab with LlamaIndex, LangChain, Langfuse tracing, and pluggable chunking/retrieval strategies."
+readme = "README.md"
+requires-python = ">=3.11"
+
+# ---------------------------------------------------------------------------
+# 📦 HOW TO INSTALL (using uv — fast, deterministic Python package manager)
+#
+#   uv sync              → install all deps into a managed .venv
+#   uv run python ...    → run any script inside that venv
+#   uv add <pkg>         → add a new dependency and update uv.lock
+#   uv remove <pkg>      → remove a dependency
+#   uv lock              → regenerate the lockfile without installing
+#
+# uv generates a `uv.lock` file (equivalent to package-lock.json in Node).
+# Always commit uv.lock — it guarantees every team member gets identical envs.
+# ---------------------------------------------------------------------------
+
+dependencies = [
+    "llama-index-core>=0.10.0",
+    "llama-index-embeddings-ollama>=0.3.0", # Ollama embedding adapter
+    "llama-index-vector-stores-qdrant>=0.3.0", # Qdrant vector store adapter
+    "llama-index-readers-wikipedia>=0.1.0", # Wikipedia document reader
+    "langchain>=0.2.0",
+    "langchain-openai>=0.1.0", # OpenAI-compatible client → used for NVIDIA API
+    "langchain-community>=0.2.0", # Community integrations (BM25, etc.)
+    "langchain-text-splitters>=0.2.0", # RecursiveCharacter + SemanticChunker
+    "langgraph>=0.1.0", # Stateful graph for multi-turn conversations
+    "qdrant-client>=1.9.0",
+    "bm25s>=0.1.0",
+    "sentence-transformers>=2.7.0",
+    "cohere>=5.0.0", # Cohere Rerank API (optional, phase 2)
+    "langfuse>=2.0.0",
+    # ── Config & Utilities ───────────────────────────────────────────────────
+    "pydantic>=2.0.0", # Data validation and settings models
+    "pydantic-settings>=2.0.0", # Load .env → Pydantic Settings class
+    "python-dotenv>=1.0.0", # .env file support
+    "pyyaml>=6.0.0", # experiment.yaml parsing
+    "loguru>=0.7.0", # Structured logging (much nicer than print)
+    "tiktoken>=0.7.0", # Token counting (works with any OpenAI-compat model)
+    # ── Data Sources ────────────────────────────────────────────────────────
+    "wikipedia>=1.4.0", # Wikipedia article fetcher
+    "datasets>=2.0.0", # HuggingFace datasets (HotpotQA for eval)
+    "langchain-experimental>=0.4.2",
+]
+
+# ---------------------------------------------------------------------------
+# 🛠️  Development Tools
+# Run:  uv sync --group dev   to install these alongside main deps
+# ---------------------------------------------------------------------------
+[dependency-groups]
+dev = [
+    "ipykernel>=6.0.0",    # Jupyter kernel for notebooks (exploration)
+    "rich>=13.0.0",        # Beautiful terminal output for debugging
+    "pytest>=8.0.0",       # Test runner
+    "pytest-asyncio>=0.23.0",  # Async test support
+    "ruff>=0.4.0",         # Extremely fast Python linter + formatter (replaces black + flake8)
+]
+
+# ---------------------------------------------------------------------------
+# 🔧  Ruff linter/formatter config (replaces black + isort + flake8)
+# Run:  uv run ruff check .    → lint
+#       uv run ruff format .   → format
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]   # pycodestyle + pyflakes + isort + pyupgrade + bugbear
+ignore = ["E501"]                       # line length handled by formatter
+
+# ---------------------------------------------------------------------------
+# 🧪  Pytest config
+# Run:  uv run pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

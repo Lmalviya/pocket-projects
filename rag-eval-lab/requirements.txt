@@ -1,0 +1,31 @@
+# ⚠️  This project uses `uv` as its package manager.
+#
+# DO NOT install from this file directly with pip.
+#
+# ── Quick Start ─────────────────────────────────────────────────────────────
+#
+#   Install uv (if not already):
+#     curl -LsSf https://astral.sh/uv/install.sh | sh   (macOS/Linux)
+#     powershell -c "irm https://astral.sh/uv/install.ps1 | iex"  (Windows)
+#
+#   Install all dependencies into a managed virtual environment:
+#     uv sync
+#
+#   Install including dev tools (pytest, ruff, etc.):
+#     uv sync --group dev
+#
+#   Run any script:
+#     uv run python app/main.py
+#
+#   Add a new package:
+#     uv add <package-name>
+#
+# ── Why uv? ─────────────────────────────────────────────────────────────────
+#   - 10-100x faster than pip
+#   - Built-in virtualenv management (no need to run `python -m venv`)
+#   - Deterministic installs via uv.lock (like npm's package-lock.json)
+#   - Single tool replaces: pip + pip-tools + virtualenv + pyenv
+#
+# All dependencies are declared in pyproject.toml → [project.dependencies]
+# The uv.lock file (auto-generated) pins exact versions for reproducibility.
+# ─────────────────────────────────────────────────────────────────────────────
