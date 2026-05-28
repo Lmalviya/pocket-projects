@@ -100,6 +100,12 @@ class Settings(BaseSettings):
         description="Langfuse server URL (self-hosted)",
     )
 
+    # ── Cohere API (optional) ─────────────────────────────────────────────────
+    cohere_api_key: str | None = Field(
+        default=None,
+        description="Cohere API key for Cohere Rerank (optional)",
+    )
+
     # ── Application ───────────────────────────────────────────────────────────
     experiment_config_path: str = Field(
         default="app/config/experiment.yaml",

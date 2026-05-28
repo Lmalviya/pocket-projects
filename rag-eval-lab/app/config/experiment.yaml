@@ -23,12 +23,14 @@ ingestion:
   chunking: fixed          # fixed | semantic | recursive | sentence
   chunk_size: 512          # tokens per chunk
   chunk_overlap: 50        # tokens of overlap between consecutive chunks
+  stage: 1                 # evaluation dataset scale stage (1 = 500, 2 = 5000, 3 = 50000)
 
 retrieval:
   method: dense            # dense | sparse | hybrid
   top_k: 5                 # number of chunks to retrieve per query
   reranker: none           # none | cross_encoder | cohere
   reranker_top_k: 5        # number of chunks to keep after reranking
+  sparse_strategy: splade  # sparse strategy: splade | bm25
 
 generation:
   mode: single_turn        # single_turn | multi_turn

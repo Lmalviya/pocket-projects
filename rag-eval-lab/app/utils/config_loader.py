@@ -55,6 +55,7 @@ class IngestionConfig:
     chunking: str = "fixed"      # fixed | semantic | recursive | sentence
     chunk_size: int = 512        # tokens per chunk
     chunk_overlap: int = 50      # overlap between consecutive chunks
+    stage: int = 1               # Evaluation dataset scale stage (1, 2, or 3)
 
 
 @dataclass
@@ -64,6 +65,7 @@ class RetrievalConfig:
     top_k: int = 5               # how many chunks to retrieve initially
     reranker: str = "none"       # none | cross_encoder | cohere
     reranker_top_k: int = 5      # how many chunks to keep after reranking
+    sparse_strategy: str = "splade" # sparse representation strategy: splade | bm25
 
 
 @dataclass
