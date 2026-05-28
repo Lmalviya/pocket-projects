@@ -127,9 +127,10 @@ def test_sparse_encoder_splade():
 
 def test_qdrant_hybrid_indexer(test_settings):
     """Test indexing TextNodes using in-memory Qdrant and pluggable encoders."""
+    import uuid
     nodes = [
-        TextNode(text="Qdrant is a high performance vector search engine.", id_="node_1"),
-        TextNode(text="SPLADE performs term expansion over a vocabulary.", id_="node_2")
+        TextNode(text="Qdrant is a high performance vector search engine.", id_=str(uuid.uuid4())),
+        TextNode(text="SPLADE performs term expansion over a vocabulary.", id_=str(uuid.uuid4()))
     ]
 
     indexer = QdrantHybridIndexer(
@@ -144,7 +145,8 @@ def test_qdrant_hybrid_indexer(test_settings):
     # validation and prevents dynamic attribute assignments. We patch the methods on the
     # class level (app.ingestion.indexing.dense.OllamaEmbedding) to intercept embedding calls safely.
     with mock.patch("app.ingestion.indexing.dense.OllamaEmbedding.get_text_embedding", return_value=[0.1] * 384), \
-         mock.patch("app.ingestion.indexing.dense.OllamaEmbedding.get_query_embedding", return_value=[0.1] * 384):
+         mock.patch("app.ingestion.indexing.dense.OllamaEmbedding.get_query_embedding", return_value=[0.1] * 384), \
+         mock.patch("app.ingestion.indexing.dense.OllamaEmbedding.get_text_embedding_batch", side_effect=lambda texts, **kwargs: [[0.1] * 384 for _ in texts]):
 
         # Build the hybrid index in-memory
         index = indexer.build_index(nodes, recreate=True)

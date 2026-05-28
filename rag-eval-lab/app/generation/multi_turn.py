@@ -147,7 +147,7 @@ class MultiTurnGenerator:
             logger.error("Failed to load conversational prompt: {err}", err=str(e))
             raise
 
-    def _generation_node(self, state: ConversationState, config: dict[str, Any]) -> dict[str, Any]:
+    def _generation_node(self, state: ConversationState, config: dict[str, Any] | None = None) -> dict[str, Any]:
         """
         LangGraph node execution: compiles the conversational context,
         incorporates chat history, and invokes the NVIDIA LLM.

@@ -110,32 +110,32 @@ class QdrantHybridIndexer:
         # We pre-compute all sparse vectors during indexing to support batching.
         self._sparse_vectors_cache: dict[str, SparseVector] = {}
 
-    def _get_sparse_doc_vector(self, text: str) -> SparseVector:
+    def _get_sparse_doc_vector(self, texts: list[str]) -> tuple[list[list[int]], list[list[float]]]:
         """
         Callback hook called by LlamaIndex's QdrantVectorStore to retrieve
-        the sparse vector for a document chunk.
+        the sparse vectors for a batch of document chunks.
         """
-        # Retrieve from cache if pre-computed (highly recommended for performance)
-        if text in self._sparse_vectors_cache:
-            return self._sparse_vectors_cache[text]
+        indices_list = []
+        values_list = []
+        for text in texts:
+            # Retrieve from cache if pre-computed (highly recommended for performance)
+            if text in self._sparse_vectors_cache:
+                indices_list.append(self._sparse_vectors_cache[text].indices)
+                values_list.append(self._sparse_vectors_cache[text].values)
+            else:
+                # Fallback: encode dynamically on-the-fly (e.g. during incremental additions)
+                res = self.sparse_encoder.encode([text])[0]
+                indices_list.append(res["indices"])
+                values_list.append(res["values"])
+        return indices_list, values_list
 
-        # Fallback: encode dynamically on-the-fly (e.g. during incremental additions)
-        res = self.sparse_encoder.encode([text])[0]
-        return SparseVector(
-            indices=res["indices"],
-            values=res["values"]
-        )
-
-    def _get_sparse_query_vector(self, query: str) -> SparseVector:
+    def _get_sparse_query_vector(self, query: str) -> tuple[list[int], list[float]]:
         """
         Callback hook called by LlamaIndex's QdrantVectorStore to retrieve
         the sparse vector for a search query.
         """
         res = self.sparse_encoder.encode([query], is_query=True)[0]
-        return SparseVector(
-            indices=res["indices"],
-            values=res["values"]
-        )
+        return res["indices"], res["values"]
 
     def build_index(self, nodes: list[TextNode], recreate: bool = True) -> VectorStoreIndex:
         """

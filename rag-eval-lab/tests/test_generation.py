@@ -48,8 +48,10 @@ def test_single_turn_generator(test_settings, mock_nodes):
     # 1. Patch ChatOpenAI inside single_turn to prevent live NVIDIA API network requests
     with mock.patch("app.generation.single_turn.ChatOpenAI") as mock_chat_openai:
         mock_llm = mock.Mock()
-        # Mock LLM invoke return value (should mimic AIMessage payload)
-        mock_llm.invoke.return_value = AIMessage(content="Linus Torvalds created the Linux operating system kernel.")
+        # Mock LLM invoke and direct call return values (should mimic AIMessage payload)
+        aimsg = AIMessage(content="Linus Torvalds created the Linux operating system kernel.")
+        mock_llm.invoke.return_value = aimsg
+        mock_llm.return_value = aimsg
         mock_chat_openai.return_value = mock_llm
 
         # 2. Instantiate and run the generator
@@ -60,7 +62,7 @@ def test_single_turn_generator(test_settings, mock_nodes):
         assert res.answer == "Linus Torvalds created the Linux operating system kernel."
         assert len(res.source_nodes) == 2
         assert res.prompt_version == "v1"  # Matches our local single_turn.yaml version
-        mock_llm.invoke.assert_called_once()
+        mock_llm.assert_called_once()
 
 
 def test_multi_turn_generator_flow(test_settings, mock_nodes):
@@ -69,7 +71,9 @@ def test_multi_turn_generator_flow(test_settings, mock_nodes):
     with mock.patch("app.generation.multi_turn.ChatOpenAI") as mock_chat_openai:
         mock_llm = mock.Mock()
         # In LangGraph message streams, the LLM takes combined messages list and returns AIMessage
-        mock_llm.invoke.return_value = AIMessage(content="Yes, he also created Git in 2005.")
+        aimsg = AIMessage(content="Yes, he also created Git in 2005.")
+        mock_llm.invoke.return_value = aimsg
+        mock_llm.return_value = aimsg
         mock_chat_openai.return_value = mock_llm
 
         # 2. Instantiate and run the generator
