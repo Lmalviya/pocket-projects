@@ -1,0 +1,39 @@
+# =============================================================================
+# experiment.yaml — RAG Eval Lab Experiment Configuration
+# =============================================================================
+# This file defines WHAT strategy combination to run. Change it to switch
+# between chunking methods, retrieval modes, or rerankers.
+#
+# 📚 LESSON — Experiment-Driven Development
+# ------------------------------------------
+# In ML engineering, you rarely know which approach is best upfront.
+# You run experiments: fix everything else, change ONE variable, measure.
+# This file IS the experiment spec — commit it to git to reproduce any run.
+#
+# Phase 1 baseline: fixed chunking + dense retrieval + no reranking
+# =============================================================================
+
+experiment_name: "fixed-dense-baseline-v1"
+
+model:
+  llm: "nvidia/llama-3.1-nemotron-nano-8b-instruct"
+  embedding: "bge-small-en-v1.5"          # served via Ollama locally
+
+ingestion:
+  chunking: fixed          # fixed | semantic | recursive | sentence
+  chunk_size: 512          # tokens per chunk
+  chunk_overlap: 50        # tokens of overlap between consecutive chunks
+
+retrieval:
+  method: dense            # dense | sparse | hybrid
+  top_k: 5                 # number of chunks to retrieve per query
+  reranker: none           # none | cross_encoder | cohere
+  reranker_top_k: 5        # number of chunks to keep after reranking
+
+generation:
+  mode: single_turn        # single_turn | multi_turn
+  prompt_version: v1       # maps to app/generation/prompts/single_turn_v1.yaml
+
+tracing:
+  enabled: true
+  session_tag: "phase1-baseline"
