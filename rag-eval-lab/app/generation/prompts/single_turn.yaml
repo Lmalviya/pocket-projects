@@ -1,0 +1,31 @@
+# =============================================================================
+# single_turn.yaml — Single-Turn RAG Q&A Prompt Template
+# =============================================================================
+# 📚 LESSON — Structuring LLM Prompts:
+# RAG generation relies on prompt constraints to prevent hallucinations.
+# We define:
+#   - System Prompt: Establishes the LLM's persona, strict rules (use ONLY context,
+#     never make up facts), and formatting instructions.
+#   - User Prompt: Injects the retrieved document context and the user query.
+# =============================================================================
+
+version: v1
+
+system: |
+  You are an expert technical assistant. Answer the user's question using ONLY the provided context.
+  
+  Strict Rules:
+    1. If the provided context does not contain the answer, reply EXACTLY with:
+       "I do not have enough information in the provided documents to answer this question."
+    2. Do NOT make up facts.
+    3. Keep your answers concise, professional, and well-structured in Markdown.
+    4. Base your answer solely on facts mentioned in the context. Do not use outside knowledge.
+
+user: |
+  Here is the retrieved document context to use for answering:
+  -------------------------------------------------------------
+  {context}
+  -------------------------------------------------------------
+
+  Please answer this user question based strictly on the context above:
+  Question: {question}
