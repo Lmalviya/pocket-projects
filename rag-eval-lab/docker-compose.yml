@@ -1,0 +1,106 @@
+version: '3.8'
+
+# =============================================================================
+# RAG Eval Lab — Self-Hosted Infrastructure Services Docker Compose
+# =============================================================================
+# 📚 LESSON — Docker Orchestration in RAG:
+# Instead of installing databases and servers natively (which clutters your OS
+# and creates "it works on my machine" issues), we orchestrate containers.
+# We define:
+#   - postgres: Langfuse's structured transaction database
+#   - redis: Langfuse's background task queue and performance cache
+#   - langfuse: Observability API & frontend dashboard
+#   - qdrant: Native Dense/Sparse hybrid vector database
+# =============================================================================
+
+networks:
+  rag_network:
+    driver: bridge
+    name: rag_eval_lab_network
+
+volumes:
+  postgres_data:
+    name: rag_eval_lab_postgres_data
+  redis_data:
+    name: rag_eval_lab_redis_data
+  qdrant_data:
+    name: rag_eval_lab_qdrant_data
+
+services:
+  # ── PostgreSQL Database Engine (Langfuse primary storage) ───────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: rag_eval_lab_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: langfuse
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - rag_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d langfuse"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis Key-Value Store (Langfuse caching & async workers) ────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: rag_eval_lab_redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - rag_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Langfuse Web Server & Observability Panel ──────────────────────────────
+  langfuse:
+    image: langfuse/langfuse:2
+    container_name: rag_eval_lab_langfuse
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      # Database connection
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/langfuse
+      # Caching & async task worker connection
+      REDIS_URL: redis://redis:6379
+      # Authentication and cryptographic credentials
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: nextauth_secret_seed_key_rag_eval_lab_32_chars
+      SALT: cryptographic_api_salt_seed_rag_eval_lab_32_chars
+      # Feature flags
+      LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "true"
+      PORT: 3000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - rag_network
+
+  # ── Qdrant Vector Search Engine (Native Dense + Sparse Hybrid) ──────────────
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: rag_eval_lab_qdrant
+    restart: always
+    ports:
+      - "6333:6333" # REST API & Dashboard Admin Panel
+      - "6334:6334" # gRPC High-Performance API
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - rag_network
