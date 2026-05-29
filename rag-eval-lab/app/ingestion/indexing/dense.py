@@ -104,7 +104,7 @@ class QdrantHybridIndexer:
         )
 
         # 3. Setup Sparse Vector Encoder (BM25 or SPLADE)
-        self.sparse_encoder = SparseEncoder(strategy=self.sparse_strategy)
+        self.sparse_encoder = SparseEncoder(settings=settings, strategy=self.sparse_strategy)
 
         # 4. In-Memory Cache for Sparse Document Vectors
         # We pre-compute all sparse vectors during indexing to support batching.

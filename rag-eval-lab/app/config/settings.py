@@ -51,30 +51,35 @@ class Settings(BaseSettings):
     # base_url. No new SDK needed!
     nvidia_api_key: str = Field(..., description="NVIDIA API key from build.nvidia.com")
     nvidia_base_url: str = Field(
-        default="https://integrate.api.nvidia.com/v1",
+        default="https://api.nvcf.nvidia.com/v1",
         description="NVIDIA API base URL (OpenAI-compatible endpoint)",
     )
     nvidia_model: str = Field(
-        default="nvidia/llama-3.1-nemotron-nano-8b-instruct",
+        default="nvidia/llama-3.1-nemotron-nano-8b-v1",
         description="NVIDIA model name to use for generation",
     )
 
     # ── Ollama Embeddings ──────────────────────────────────────────────────
     # 📚 LESSON — Ollama lets you run models locally. The embedding model
-    # BAAI/bge-small-en-v1.5 produces 384-dimensional vectors and is fast + free.
     # "Embedding" = converting text into a list of numbers (a vector) that
     # captures semantic meaning. Similar texts → similar vectors.
     ollama_base_url: str = Field(
+        alias="OLLAMA_BASE_URL",
         default="http://localhost:11434",
         description="Ollama server URL",
     )
     ollama_embed_model: str = Field(
-        default="bge-small-en-v1.5",
+        default="mxbai-embed-large",
         description="Ollama embedding model name",
     )
     embed_dim: int = Field(
-        default=384,
+        default=1024,
         description="Output dimension of the embedding model (bge-small = 384)",
+    )
+
+    sparse_encoder: str = Field(
+        default="naver/splade-cocondenser-ensembledistil",
+        description="Sparse encoder model name",
     )
 
     # ── Qdrant Vector Database ───────────────────────────────────────────────
@@ -83,11 +88,12 @@ class Settings(BaseSettings):
     # similar to this query vector" — that's the core of dense retrieval.
     qdrant_url: str = Field(
         default="http://localhost:6333",
+        alias="QDRANT_URL",
         description="Qdrant REST API URL",
     )
     qdrant_collection_name: str = Field(
         default="rag_eval_lab",
-        description="Qdrant collection name (like a table in a relational DB)",
+        description="Qdrant collection name",
     )
 
     # ── Langfuse Tracing ──────────────────────────────────────────────────────
@@ -97,6 +103,7 @@ class Settings(BaseSettings):
     langfuse_secret_key: str = Field(..., description="Langfuse project secret key")
     langfuse_host: str = Field(
         default="http://localhost:3000",
+        alias="LANGFUSE_HOST",
         description="Langfuse server URL (self-hosted)",
     )
 
@@ -144,7 +151,4 @@ def get_settings() -> Settings:
     cache in tests with get_settings.cache_clear()).
     """
     settings = Settings()
-    if settings.hf_token:
-        import os
-        os.environ["HF_TOKEN"] = settings.hf_token
     return settings

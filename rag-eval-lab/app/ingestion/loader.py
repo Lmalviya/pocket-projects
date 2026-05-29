@@ -15,11 +15,15 @@ on GENUINE, long-form documents.
   original context sentences (snippets) so that evaluators can verify retrieval accuracy.
 """
 
+from dataclasses import dataclass
+from tqdm import tqdm
 import json
 import os
 import random
 import time
+import re
 from typing import Any
+from pathlib import Path
 
 from datasets import load_dataset
 from llama_index.core import Document
@@ -28,9 +32,35 @@ from llama_index.readers.wikipedia import WikipediaReader
 
 from app.tracing.langfuse import LangfuseTracer, get_safe_tracer
 from app.utils.logger import get_logger
-
+from app.config.settings import get_settings
 logger = get_logger(__name__)
 
+@dataclass(frozen=True)
+class Stage:
+    easy: int
+    medium: int
+    hard: int
+
+@dataclass
+class StageConfig:
+    stage_1: Stage = Stage(easy=50, medium=37, hard=38)
+    stage_2: Stage = Stage(easy=150, medium=175, hard=175)
+    stage_3: Stage = Stage(easy=300, medium=450, hard=450)
+
+# ── Checkpoint helpers ────────────────────────────────────────────────────────
+OUTPUT_DIR   = Path("wiki_articles")          # where .json files are saved
+CHECKPOINT   = Path("checkpoint.json")        # tracks completed titles
+
+def load_checkpoint() -> set:
+    if CHECKPOINT.exists():
+        data = json.loads(CHECKPOINT.read_text())
+        logger.info(f"Resuming — {len(data['done'])} titles already done")
+        return set(data["done"])
+    return set()
+ 
+def save_checkpoint(done: set):
+    CHECKPOINT.write_text(json.dumps({"done": list(done)}, indent=2))
+ 
 
 class DocumentLoader:
     """
@@ -43,255 +73,208 @@ class DocumentLoader:
         Initialize the loader with optional tracer.
         """
         self.tracer = get_safe_tracer(tracer)
+        self.wikipedia_cache = "data/wikipedia_cache"
+        self.hotpotqa_cache = "data/hotpot_cache"
+
+    def get_safe_title(self, title: str) -> str:
+        return re.sub(r'[^\w\s-]', '_', title).strip().replace(' ', '_')
         
-        # Inject hf_token into process environment for authenticated HF Hub requests
+    def _load_wikipedia_cache(self) -> None:
+        cache_dir = Path(self.wikipedia_cache)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_files = list(cache_dir.glob("*.json"))
+        if len(cache_files) > 0:
+            logger.info("Wikipedia granular cache already populated with {count} files.", count=len(cache_files))
+            return
+
         try:
-            from app.config.settings import get_settings
-            settings = get_settings()
-            if settings.hf_token:
-                import os
-                os.environ["HF_TOKEN"] = settings.hf_token
-        except Exception as e:
-            logger.warning("Could not automatically export HF_TOKEN to environment: {err}", err=str(e))
-
-    def load_from_wikipedia(self, titles: list[str]) -> list[Document]:
-        """
-        Loads full-text articles from Wikipedia using optimal batch query API requests.
-        Utilizes a local file-based cache to avoid network requests, and fetches
-        missing pages in optimal batches of 50 to avoid rate limits entirely.
-
-        Args:
-            titles: List of Wikipedia article titles.
-
-        Returns:
-            List of LlamaIndex Document objects containing full-text contents.
-        """
-        logger.info("Loading {count} Wikipedia articles...", count=len(titles))
-
-        span_ctx = (
-            self.tracer.span(
-                name="ingestion.load.wikipedia_api",
-                input={"titles": titles, "count": len(titles)},
+            logger.info("Wikipedia granular cache is empty. Initiating cache setup...")
+            dataset = load_dataset(
+                "wikimedia/wikipedia",
+                "20231101.en", 
+                split="train",
+                # streaming=True,
+                cache_dir=Path("data/hf_cache"),
+                token=get_settings().hf_token
             )
-            if self.tracer
-            else None
-        )
+            
+            logger.info("Downloading Wikipedia articles. Writing directly to granular cache...")
+            for sample in tqdm(dataset,  desc="Processing Wikipedia"):
+                title = sample.get("title")
+                text = sample.get("text")
+                if title and text:
+                    # 1. Directly save to granular cache!
+                    safe_title = self.get_safe_title(title)
+                    cache_path = cache_dir / f"{safe_title}.json"
+                    cached_data = {
+                        "title": title,
+                        "text": text,
+                        "url": sample.get("url", None)
+                    }
+                    with open(cache_path, "w", encoding="utf-8") as f:
+                        json.dump(cached_data, f, ensure_ascii=False)
+        except Exception as e:
+            logger.error("Failed to stream Wikipedia dataset from Hugging Face Hub: {err}", err=str(e))
+            raise ConnectionError(f"❌ Failed to stream Wikipedia dataset from Hugging Face Hub: {str(e)}") from e
+
+
+    def _create_hotpotqa_cache(self) -> None:
+        cache_dir = Path(self.hotpotqa_cache)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_files = list(cache_dir.glob("*.json"))
+        if len(cache_files) > 0:
+            logger.info("HotpotQA cache already populated with {count} files.", count=len(cache_files))
+            return
+
+        logger.info("Local HotpotQA dataset not found under '{path}'. Downloading from Hugging Face...", path=cache_dir)
+        logger.info("Streaming HotpotQA 'distractor' dataset from HF Hub to compile local cache...")
+        try:
+            easy = []
+            medium = []
+            hard = []
+            stream_dataset = load_dataset(
+                "hotpotqa/hotpot_qa", 
+                "distractor", 
+                split="train", 
+                streaming=True,
+                token=get_settings().hf_token
+            )
+            for sample in tqdm(stream_dataset, desc="Processing HotpotQA"):
+                context = sample["context"]
+                item = {
+                    "id": sample.get("id", ""),
+                    "question": sample.get("question", ""),
+                    "answer": sample.get("answer", ""),
+                    "type": sample.get("type", ""),
+                    "level": sample.get("level", ""),
+                    "titles": context.get("title", []),
+                    "references": ["\n".join(sentence) for sentence in context.get("sentences", [])] 
+                }
+
+                max_easy = StageConfig.stage_3.easy
+                max_medium = StageConfig.stage_3.medium
+                max_hard = StageConfig.stage_3.hard
+                if item["level"] == "easy" and len(easy) <= max_easy:
+                    easy.append(item)
+                elif item["level"] == "medium" and len(medium) <= max_medium:
+                    medium.append(item)
+                elif item["level"] == "hard" and len(hard) <= max_hard:
+                    hard.append(item)
+                
+                if len(easy) > max_easy and len(medium) > max_hard and len(hard) > max_hard:
+                    break
+            
+            with open(cache_dir / "easy.json", "w", encoding="utf-8") as f:
+                json.dump(easy, f, ensure_ascii=False)
+            
+            with open(cache_dir / "medium.json", "w", encoding="utf-8") as f:
+                json.dump(medium, f, ensure_ascii=False)
+            
+            with open(cache_dir / "hard.json", "w", encoding="utf-8") as f:
+                json.dump(hard, f, ensure_ascii=False)
+                
+            logger.info("Successfully downloaded and cached HotpotQA dataset locally under '{path}'", path=cache_dir)
+        except Exception as hf_err:
+            err_msg = f"❌ Failed to load or cache HotpotQA dataset: {str(hf_err)}"
+            logger.error(err_msg)
+            raise ConnectionError(err_msg) from hf_err
+        
+    def load_from_wikipedia_cache(self, titles: list[str]) -> list[Document]:
+        """
+        Loads full-text articles strictly from the local granular file-based cache.
+        All requested articles must exist in the cache.
+        """
+        logger.info("Loading {count} Wikipedia articles from granular cache...", count=len(titles))
+        span_ctx = self.tracer.span(name="ingestion.load.wikipedia_cache", input={"titles": titles, "count": len(titles)}) if self.tracer else None
 
         try:
             documents = []
-            
-            # Ensure local cache directory exists in workspace (ignored by git)
-            cache_dir = os.path.join("data", "wikipedia_cache")
-            os.makedirs(cache_dir, exist_ok=True)
-            
-            import re
-            import requests
-            
-            # Helper to generate safe cache file name
-            def get_cache_path(title: str) -> str:
-                safe_title = re.sub(r'[^\w\s-]', '_', title).strip().replace(' ', '_')
-                return os.path.join(cache_dir, f"{safe_title}.json")
-            
-            cached_count = 0
-            uncached_titles = []
-            
-            # 1. First, check local disk cache for all titles
+            cache_dir = Path(self.wikipedia_cache)
+ 
+            missing_titles = []
             for title in titles:
-                cache_path = get_cache_path(title)
-                if os.path.exists(cache_path):
+                safe_title = self.get_safe_title(title)
+                cache_path = cache_dir / f"{safe_title}.json"
+                
+                if cache_path.exists():
                     try:
                         with open(cache_path, "r", encoding="utf-8") as f:
                             cached_data = json.load(f)
-                        
-                        # Reconstruct the LlamaIndex Document object
                         doc = Document(
                             text=cached_data["text"],
                             metadata=cached_data.get("metadata", {"title": title, "file_name": f"{title}.txt"})
                         )
                         documents.append(doc)
-                        cached_count += 1
-                    except Exception as cache_err:
-                        logger.warning("Failed to read cache for '{title}' (will re-fetch): {err}", title=title, err=str(cache_err))
-                        uncached_titles.append(title)
+                    except Exception as err:
+                        logger.warning("Failed to read cache file for '{title}': {err}", title=title, err=str(err))
+                        missing_titles.append(title)
                 else:
-                    uncached_titles.append(title)
-            
-            logger.info("Cache search complete: {cached} loaded from cache, {missed} cache misses", cached=cached_count, missed=len(uncached_titles))
-            
-            # 2. Fetch cache misses in optimal batches of 50 to avoid rate limits
-            if len(uncached_titles) > 0:
-                batch_size = 50
-                for start_idx in range(0, len(uncached_titles), batch_size):
-                    batch_chunk = uncached_titles[start_idx:start_idx + batch_size]
-                    
-                    max_retries = 3
-                    retry_delay = 2.0
-                    
-                    for attempt in range(max_retries):
-                        try:
-                            # Direct Wikipedia Query API batch request
-                            batch_titles_str = "|".join(batch_chunk)
-                            url = "https://en.wikipedia.org/w/api.php"
-                            params = {
-                                "action": "query",
-                                "prop": "extracts",
-                                "explaintext": 1,     # return plain text, not HTML
-                                "titles": batch_titles_str,
-                                "format": "json",
-                                "redirects": 1,       # resolve redirects
-                            }
-                            headers = {
-                                "User-Agent": "RAGEvalLab/1.0 (contact: admin@pocket-projects.com)"
-                            }
-                            
-                            logger.info(
-                                "Fetching live Wikipedia batch ({start}-{end}/{total}) (Attempt {attempt}/{max})...",
-                                start=start_idx + 1,
-                                end=min(start_idx + batch_size, len(uncached_titles)),
-                                total=len(uncached_titles),
-                                attempt=attempt + 1,
-                                max=max_retries
-                            )
-                            
-                            response = requests.get(url, params=params, headers=headers, timeout=20)
-                            response.raise_for_status()
-                            
-                            data = response.json()
-                            pages = data.get("query", {}).get("pages", {})
-                            
-                            # Process and cache each page in the batch response
-                            for page_id, page_info in pages.items():
-                                if "missing" in page_info:
-                                    continue
-                                page_title = page_info.get("title")
-                                extract = page_info.get("extract")
-                                
-                                if page_title and extract:
-                                    # Save to cache
-                                    cache_path = get_cache_path(page_title)
-                                    cached_data = {
-                                        "title": page_title,
-                                        "text": extract,
-                                        "metadata": {
-                                            "title": page_title,
-                                            "file_name": f"{page_title}.txt"
-                                        }
-                                    }
-                                    with open(cache_path, "w", encoding="utf-8") as f:
-                                        json.dump(cached_data, f, ensure_ascii=False, indent=2)
-                                    
-                                    # Add to documents
-                                    doc = Document(
-                                        text=extract,
-                                        metadata={
-                                            "title": page_title,
-                                            "file_name": f"{page_title}.txt"
-                                        }
-                                    )
-                                    documents.append(doc)
-                            
-                            break  # success, break retry loop!
-                            
-                        except Exception as batch_err:
-                            logger.warning(
-                                "Wikipedia API batch query failed on attempt {attempt}: {err}",
-                                attempt=attempt + 1,
-                                err=str(batch_err)
-                            )
-                            if attempt < max_retries - 1:
-                                time.sleep(retry_delay)
-                                retry_delay *= 2.0
-                    
-                    # Polite sleep delay between distinct batch requests
-                    if start_idx + batch_size < len(uncached_titles):
-                        time.sleep(1.5)
+                    missing_titles.append(title)
 
-            logger.info(
-                "Successfully loaded {total} Wikipedia documents ({cached} from cache, {fetched} fetched from batch API)",
-                total=len(documents),
-                cached=cached_count,
-                fetched=len(documents) - cached_count
-            )
-            
+            if len(missing_titles) > 0:
+                logger.warning("{count} requested Wikipedia articles were missing in cache: {missing}", count=len(missing_titles), missing=missing_titles[:10])
+
+            logger.info("Successfully loaded {count} documents from granular cache", count=len(documents))
             if span_ctx:
                 span_ctx.update(output={"document_count": len(documents)})
-                
             return documents
 
         except Exception as e:
-            err_msg = (
-                f"❌ [Network Error] Failed to load data from Wikipedia API.\n"
-                f"Reason: {str(e)}\n"
-                f"Troubleshooting: Check internet connection, proxy settings, or rate limits."
-            )
+            err_msg = f"❌ Failed to load documents from Wikipedia granular cache: {str(e)}"
             logger.error(err_msg)
             if span_ctx:
                 span_ctx.update(level="ERROR", status_message=err_msg)
-            raise ConnectionError(err_msg) from e
+            raise
+    
+    def load_from_hotpot_cache(self, numEasy: int, numMedium: int, numHard: int) -> tuple[list[Document], list[dict]]:
+        easy_path = Path(self.hotpotqa_cache) / "easy.json"
+        medium_path = Path(self.hotpotqa_cache) / "medium.json"
+        hard_path = Path(self.hotpotqa_cache) / "hard.json"
 
-    def load_from_directory(self, path: str, required_exts: list[str] = [".txt", ".md"]) -> list[Document]:
-        """
-        Reads local files from a directory using SimpleDirectoryReader.
-        """
-        logger.info("Reading directory '{path}' for extensions {exts}...", path=path, exts=required_exts)
-        
-        span_ctx = (
-            self.tracer.span(
-                name="ingestion.load.directory",
-                input={"path": path, "required_exts": required_exts},
-            )
-            if self.tracer
-            else None
-        )
+        documents = []
+        golden_dataset = []
 
         try:
-            if not os.path.exists(path):
-                raise FileNotFoundError(f"Directory path '{path}' does not exist.")
-
-            reader = SimpleDirectoryReader(input_dir=path, recursive=True, required_exts=required_exts)
-            documents = reader.load_data()
-            
-            logger.info("Loaded {count} documents from local directory", count=len(documents))
-            
-            if span_ctx:
-                span_ctx.update(output={"document_count": len(documents)})
-                
-            return documents
-
-        except Exception as e:
-            logger.error("Failed to load local directory: {err}", err=str(e))
-            if span_ctx:
-                span_ctx.update(level="ERROR", status_message=str(e))
+            easy_data = json.load(open(easy_path, "r", encoding="utf-8"))[:numEasy]
+            medium_data = json.load(open(medium_path, "r", encoding="utf-8"))[:numMedium]
+            hard_data = json.load(open(hard_path, "r", encoding="utf-8"))[:numHard]
+        except FileNotFoundError as err:
+            err_msg = f"❌ Failed to load HotpotQA cache: {str(err)}"
+            logger.error(err_msg)
             raise
+
+        article_titles = []
+        golden_dataset = easy_data + medium_data + hard_data
+        logger.info("Total dataset size: {size} (easy: {easy}, medium: {medium}, hard: {hard})", size=len(golden_dataset), easy=len(easy_data), medium=len(medium_data), hard=len(hard_data))
+        for item in golden_dataset:
+            article_titles.extend(item["titles"])
+
+        unique_article_titles = list(set(article_titles))
+        logger.info("Total unique article titles: {size}", size=len(unique_article_titles))
+        documents = self.load_from_wikipedia_cache(unique_article_titles)
+        return documents, golden_dataset
+
 
     def compile_hotpotqa_stage(self, stage: int) -> tuple[list[Document], list[dict]]:
         """
         Compiles the corpus (full raw articles) and golden dataset (questions, answers, gold snippets)
         for a specific evaluation stage.
-
-        📚 LESSON — Symmetrical Golden Data & Stratified Sampling:
-        This method compiles:
-          1. A golden evaluation questions list (Easy/Medium/Hard + Bridge/Comparison)
-             persisted to `data/golden_set_stage_{stage}.json`.
-          2. A database corpus containing the FULL, raw Wikipedia articles for all gold
-             and distractor articles, padded to the exact target size.
         """
         stage_config = {
-            1: {"total_docs": 500, "q_easy": 50, "q_medium": 37, "q_hard": 38},
-            2: {"total_docs": 5000, "q_easy": 150, "q_medium": 175, "q_hard": 175},
-            3: {"total_docs": 50000, "q_easy": 300, "q_medium": 450, "q_hard": 450},
+            1: StageConfig.stage_1,
+            2: StageConfig.stage_2,
+            3: StageConfig.stage_3,
         }
 
         if stage not in stage_config:
             raise ValueError(f"Invalid Stage number: {stage}. Choose 1, 2, or 3.")
 
         cfg = stage_config[stage]
-        total_questions = cfg["q_easy"] + cfg["q_medium"] + cfg["q_hard"]
+        total_questions = cfg.easy + cfg.medium + cfg.hard
 
         logger.info(
-            "Compiling HotpotQA Stage {stage}: Target {docs} full docs, {questions} QA pairs",
+            "Compiling HotpotQA Stage {stage}: Target {questions} QA pairs",
             stage=stage,
-            docs=cfg["total_docs"],
             questions=total_questions,
         )
 
@@ -305,201 +288,37 @@ class DocumentLoader:
         )
 
         try:
-            # 1. Fetch HotpotQA Training Split as a stream to avoid 1.4 GB local downloads
-            logger.info("Streaming HotpotQA 'distractor' dataset from Hugging Face Hub...")
-            try:
-                dataset = load_dataset("hotpotqa/hotpot_qa", "distractor", split="train", streaming=True)
-            except Exception as hf_err:
-                err_msg = (
-                    f"❌ [Network Error] Failed to load HotpotQA dataset from Hugging Face Hub.\n"
-                    f"Reason: {str(hf_err)}\n"
-                    f"Troubleshooting: Verify internet connection and proxy settings."
-                )
-                logger.error(err_msg)
-                raise ConnectionError(err_msg) from hf_err
+            # 1. Ensure Wikipedia granular cache is populated
+            self._create_wikipedia_cache()
+            self._create_hotpotqa_cache()
+            documents, golden_dataset = self.load_from_hotpot_cache(cfg.easy, cfg.medium, cfg.hard)
 
-            # 2. Stratified Sampling of Golden Questions
-            easy_qs: list[dict] = []
-            medium_qs: list[dict] = []
-            hard_qs: list[dict] = []
+            logger.info("Documents count: {count}", count=len(documents))
+            logger.info("Golden dataset size: {size}", size=len(golden_dataset))
 
-            logger.info("Filtering and stratifying questions by difficulty and multi-hop type...")
-            # We shuffle the streamed dataset using a buffer for reproducible deterministic splits
-            shuffled_dataset = dataset.shuffle(seed=42, buffer_size=1000)
-
-            for item in shuffled_dataset:
-                level = item.get("level", "").lower()
-                
-                # We filter to collect a balanced mix of bridge and comparison
-                if level == "easy" and len(easy_qs) < cfg["q_easy"]:
-                    easy_qs.append(item)
-                elif level == "medium" and len(medium_qs) < cfg["q_medium"]:
-                    medium_qs.append(item)
-                elif level == "hard" and len(hard_qs) < cfg["q_hard"]:
-                    hard_qs.append(item)
-
-                if (
-                    len(easy_qs) == cfg["q_easy"]
-                    and len(medium_qs) == cfg["q_medium"]
-                    and len(hard_qs) == cfg["q_hard"]
-                ):
-                    break
-
-            selected_items = easy_qs + medium_qs + hard_qs
-            logger.info("Selected {count} golden questions successfully", count=len(selected_items))
-
-            # 3. Collect Target Titles & Construct Golden QA Set
-            # We compile the golden QA set AND collect all unique titles of articles we need.
-            target_titles = set()
-            gold_titles = set()
-            golden_questions = []
-
-            for item in selected_items:
-                q_id = item.get("id") or item.get("_id")
-                question = item["question"]
-                answer = item["answer"]
-                supporting_facts = item["supporting_facts"]
-                
-                # Gold titles (articles containing ground-truth facts) for this question
-                sf_titles = list(set([fact[0] for fact in supporting_facts]))
-                gold_titles.update(sf_titles)
-                target_titles.update(sf_titles)
-
-                # 📚 LESSON — Supporting Context Snippets inside Golden Dataset:
-                # We store the original sentence-level snippets from HotpotQA's context
-                # inside the golden dataset JSON for precise verification during evaluation.
-                gold_snippets = {}
-                context = item["context"]
-                # context: {"title": [t1, t2], "sentences": [[s1, s2], [s3]]}
-                for title, sentences in zip(context["title"], context["sentences"]):
-                    if title in sf_titles:
-                        gold_snippets[title] = " ".join(sentences)
-
-                golden_questions.append({
-                    "id": q_id,
-                    "question": question,
-                    "answer": answer,
-                    "level": item["level"],
-                    "type": item["type"],
-                    "gold_titles": sf_titles,
-                    "gold_snippets": gold_snippets,  # Added supporting snippet context!
-                })
-
-            # Gather extra distractor titles from other samples to reach target size
-            logger.info("Gathering distractor article titles to reach exactly {docs} docs...", docs=cfg["total_docs"])
-            if len(target_titles) < cfg["total_docs"]:
-                for item in shuffled_dataset:
-                    context = item["context"]
-                    for title in context["title"]:
-                        if title not in target_titles:
-                            target_titles.add(title)
-                        if len(target_titles) >= cfg["total_docs"]:
-                            break
-                    if len(target_titles) >= cfg["total_docs"]:
-                        break
-
-            titles_list = list(target_titles)
-            logger.info(
-                "Target compiled: {total} unique titles ({gold} gold, {dist} distractors)",
-                total=len(titles_list),
-                gold=len(gold_titles),
-                dist=len(titles_list) - len(gold_titles),
-            )
-
-            # 4. Fetch Full-Text Content for the Titles
-            # We try streaming the Hugging Face full Wikipedia dataset first (fast & rate-limit proof).
-            # If that fails or is offline, we fall back to fetching page-by-page from live Wikipedia API.
-            corpus_articles = {}  # title -> full_text
-
-            # logger.info("Fetching full Wikipedia articles (streaming via Hugging Face)...")
-            # try:
-            #     # 'wikipedia' dataset split 'train' has fields: 'id', 'url', 'title', 'text'
-            #     wiki_stream = load_dataset("wikipedia", "20220301.en", split="train", streaming=True)
-            #     titles_to_find = set(titles_list)
-                
-            #     # Scan stream to gather full texts
-            #     for wiki_doc in wiki_stream:
-            #         title = wiki_doc["title"]
-            #         if title in titles_to_find:
-            #             corpus_articles[title] = wiki_doc["text"]
-            #             titles_to_find.remove(title)
-                        
-            #         if len(titles_to_find) == 0:
-            #             break
-                
-            #     logger.info(
-            #         "HF stream retrieved {count}/{total} full-text articles",
-            #         count=len(corpus_articles),
-            #         total=len(titles_list),
-            #     )
-            # except Exception as stream_err:
-            #     logger.warning("HF Wikipedia streaming was unavailable: {err}", err=str(stream_err))
-
-            # Fallback for remaining titles: Query live Wikipedia API
-            remaining_titles = [t for t in titles_list if t not in corpus_articles]
-            if len(remaining_titles) > 0:
-                logger.info("Falling back to live Wikipedia API for {count} remaining pages...", count=len(remaining_titles))
-                try:
-                    fallback_docs = self.load_from_wikipedia(remaining_titles)
-                    for doc in fallback_docs:
-                        title = doc.metadata.get("title")
-                        if title and title not in corpus_articles:
-                            corpus_articles[title] = doc.text
-                except Exception as api_err:
-                    logger.warning("Wikipedia API fallback failed: {err}", err=str(api_err))
-
-            # Verify that we succeeded in fetching content
-            if len(corpus_articles) == 0:
-                err_msg = (
-                    "❌ [Network Error] Could not load any Wikipedia article content.\n"
-                    "Both Hugging Face streaming and Wikipedia live API calls failed due to network blocks.\n"
-                    "Please check your internet settings or configure an HTTP proxy."
-                )
-                logger.error(err_msg)
-                raise ConnectionError(err_msg)
-
-            # 5. Convert full articles to LlamaIndex Document objects
-            documents = []
-            for title, text in corpus_articles.items():
-                is_gold = title in gold_titles
-                doc = Document(
-                    text=text,
-                    metadata={
-                        "title": title,
-                        "source": "wikipedia_full",
-                        "is_gold": is_gold,
-                        "stage": stage,
-                    },
-                )
-                documents.append(doc)
-
-            logger.info(
-                "Final full-text corpus compiled: {total} documents ready for chunking",
-                total=len(documents),
-            )
-
-            # 6. Save the Symmetrical Golden Question Set to Disk
+            # Save the Golden Question Set to Disk
             os.makedirs("data", exist_ok=True)
             gold_file_path = f"data/golden_set_stage_{stage}.json"
             
             with open(gold_file_path, "w", encoding="utf-8") as f:
-                json.dump(golden_questions, f, indent=2, ensure_ascii=False)
-            logger.info("Saved {count} golden questions to '{path}'", count=len(golden_questions), path=gold_file_path)
+                json.dump(golden_dataset, f, indent=2, ensure_ascii=False)
+            logger.info("Saved {count} golden questions to '{path}'", count=len(golden_dataset), path=gold_file_path)
 
             if span_ctx:
                 span_ctx.update(
                     output={
                         "documents_count": len(documents),
-                        "gold_articles_count": len(gold_titles),
-                        "questions_count": len(golden_questions),
+                        "questions_count": len(golden_dataset),
                         "golden_questions_file": gold_file_path,
                     }
                 )
 
-            return documents, golden_questions
+            return documents, golden_dataset
 
         except Exception as e:
             logger.error("HotpotQA stage compilation failed: {err}", err=str(e))
             if span_ctx:
                 span_ctx.update(level="ERROR", status_message=str(e))
             raise
+
+

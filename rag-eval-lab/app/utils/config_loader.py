@@ -45,8 +45,10 @@ logger = get_logger(__name__)
 @dataclass
 class ModelConfig:
     """Which LLM and embedding model to use for this experiment run."""
-    llm: str = "nvidia/llama-3.1-nemotron-nano-8b-instruct"
-    embedding: str = "bge-small-en-v1.5"
+    llm: str = "nvidia/llama-3.1-nemotron-nano-8b-v1"
+    embedding: str = "mxbai-embed-large"
+    embedding_dim: int = 1024
+    sparse_encoder: str = "naver/splade-cocondenser-ensembledistil"
 
 
 @dataclass

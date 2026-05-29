@@ -82,51 +82,58 @@ class SingleTurnPipeline(BasePipeline):
             else None
         )
 
-        try:
-            # 1. Retrieve candidate document chunks
-            retrieved_nodes = self.retriever.retrieve(query)
+        if span_ctx:
+            ctx = span_ctx
+        else:
+            from contextlib import nullcontext
+            ctx = nullcontext()
 
-            # 2. Apply Stage-2 Reranking if configured
-            processed_nodes = retrieved_nodes
-            if self.reranker:
-                processed_nodes = self.reranker.rerank(query, retrieved_nodes)
+        with ctx:
+            try:
+                # 1. Retrieve candidate document chunks
+                retrieved_nodes = self.retriever.retrieve(query)
 
-            # 3. Generate response using NVIDIA LLM
-            gen_res = self.generator.generate(
-                query=query,
-                nodes=processed_nodes,
-            )
+                # 2. Apply Stage-2 Reranking if configured
+                processed_nodes = retrieved_nodes
+                if self.reranker:
+                    processed_nodes = self.reranker.rerank(query, retrieved_nodes)
 
-            elapsed_ms = (time.perf_counter() - start_time) * 1000
-
-            # Record top-level trace input and output on the Langfuse server
-            if self.tracer:
-                self.tracer.set_trace_io(
-                    input={"query": query},
-                    output={"answer": gen_res.answer},
+                # 3. Generate response using NVIDIA LLM
+                gen_res = self.generator.generate(
+                    query=query,
+                    nodes=processed_nodes,
                 )
+
+                elapsed_ms = (time.perf_counter() - start_time) * 1000
+
+                # Record top-level trace input and output on the Langfuse server
+                if self.tracer:
+                    self.tracer.set_trace_io(
+                        input={"query": query},
+                        output={"answer": gen_res.answer},
+                    )
+                    if span_ctx:
+                        span_ctx.update(output={"answer": gen_res.answer})
+
+                logger.info("Single-turn RAG pipeline query complete. Latency: {lat}ms", lat=round(elapsed_ms, 2))
+
+                return PipelineResult(
+                    query=query,
+                    answer=gen_res.answer,
+                    retrieved_nodes=processed_nodes,
+                    trace_id=self.tracer.get_trace_id() if self.tracer else None,
+                    trace_url=self.tracer.get_trace_url() if self.tracer else None,
+                    latency_ms=round(elapsed_ms, 2),
+                    metadata={
+                        "prompt_version": gen_res.prompt_version,
+                    },
+                )
+
+            except Exception as e:
+                logger.error("Single-turn RAG pipeline query failed: {err}", err=str(e))
                 if span_ctx:
-                    span_ctx.update(output={"answer": gen_res.answer})
-
-            logger.info("Single-turn RAG pipeline query complete. Latency: {lat}ms", lat=round(elapsed_ms, 2))
-
-            return PipelineResult(
-                query=query,
-                answer=gen_res.answer,
-                retrieved_nodes=processed_nodes,
-                trace_id=self.tracer.get_trace_id() if self.tracer else None,
-                trace_url=self.tracer.get_trace_url() if self.tracer else None,
-                latency_ms=round(elapsed_ms, 2),
-                metadata={
-                    "prompt_version": gen_res.prompt_version,
-                },
-            )
-
-        except Exception as e:
-            logger.error("Single-turn RAG pipeline query failed: {err}", err=str(e))
-            if span_ctx:
-                span_ctx.update(level="ERROR", status_message=str(e))
-            raise
+                    span_ctx.update(level="ERROR", status_message=str(e))
+                raise
 
     @property
     def name(self) -> str:

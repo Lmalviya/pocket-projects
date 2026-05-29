@@ -17,12 +17,16 @@ Both methods return a sparse representation compatible with Qdrant:
   `{"indices": list[int], "values": list[float]}`
 """
 
+from sqlalchemy import desc
+from dill import settings
 import math
 from typing import Any
+from tqdm import tqdm
 
 from sentence_transformers import SparseEncoder as STSparseEncoder
 from transformers import AutoTokenizer
 
+from app.config.settings import Settings
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -34,7 +38,7 @@ class SparseEncoder:
     Supports BM25 (lexical) and SPLADE (neural learned expansion) strategies.
     """
 
-    def __init__(self, strategy: str = "splade") -> None:
+    def __init__(self, settings: Settings, strategy: str = "splade") -> None:
         """
         Initialize the sparse encoder.
 
@@ -42,7 +46,7 @@ class SparseEncoder:
             strategy: Sparse representation strategy: "splade" | "bm25".
         """
         self.strategy = strategy.lower()
-        self.model_id = "naver/splade-cocondenser-ensembledistil"
+        self.model_id = settings.sparse_encoder
 
         if self.strategy not in ["splade", "bm25"]:
             raise ValueError(f"Invalid sparse strategy '{self.strategy}'. Choose 'splade' or 'bm25'.")
@@ -109,7 +113,7 @@ class SparseEncoder:
                 raw_embeddings = [raw_embeddings]
                 
             formatted = []
-            for emb in raw_embeddings:
+            for emb in tqdm(raw_embeddings, desc="ConvertingSPLADE Embeddings to Qdrant Format"):
                 # Convert numpy arrays to Python lists
                 indices = [int(i) for i in emb["indices"]]
                 values = [float(v) for v in emb["values"]]
@@ -149,7 +153,7 @@ class SparseEncoder:
         doc_freqs: dict[int, int] = {}
         
         # 1. Tokenize corpus
-        for text in texts:
+        for text in tqdm(texts, desc="Tokenizing Corpus"):
             # Add_special_tokens=False ignores [CLS] and [SEP]
             tokens = self.tokenizer.encode(text, add_special_tokens=False)
             tokenized_corpus.append(tokens)

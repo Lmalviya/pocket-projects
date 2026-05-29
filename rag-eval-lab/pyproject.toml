@@ -45,6 +45,7 @@ dependencies = [
     "datasets>=2.0.0", # HuggingFace datasets (HotpotQA for eval)
     "langchain-experimental>=0.4.2",
     "debugpy>=1.8.20",
+    "duckdb>=1.5.3",
 ]
 
 # ---------------------------------------------------------------------------

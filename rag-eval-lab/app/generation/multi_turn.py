@@ -28,7 +28,7 @@ from langgraph.graph.message import add_messages
 from llama_index.core.schema import NodeWithScore
 
 from app.config.settings import Settings
-from app.generation.single_turn import GenerationResult
+from app.generation.single_turn import GenerationResult, CompatibleChatOpenAI
 from app.tracing.langfuse import LangfuseTracer, get_langfuse_callback, get_langfuse_client, get_safe_tracer
 from app.utils.logger import get_logger
 from app.utils.text import nodes_to_context_str
@@ -71,7 +71,7 @@ class MultiTurnGenerator:
             "Connecting to NVIDIA API model '{model}' for multi-turn conversations...",
             model=settings.nvidia_model,
         )
-        self.llm = ChatOpenAI(
+        self.llm = CompatibleChatOpenAI(
             api_key=settings.nvidia_api_key,
             base_url=settings.nvidia_base_url,
             model=settings.nvidia_model,
@@ -109,7 +109,7 @@ class MultiTurnGenerator:
             try:
                 client = get_langfuse_client()
                 logger.info("Attempting to fetch 'rag-conversation-prompt' from Langfuse Registry...")
-                langfuse_prompt = client.get_prompt("rag-conversation-prompt")
+                langfuse_prompt = client.get_prompt("rag-conversation-prompt", label="production")
                 
                 # In Langfuse prompt registries, we can define custom variables.
                 # We pull raw system and user strings from prompt templates.

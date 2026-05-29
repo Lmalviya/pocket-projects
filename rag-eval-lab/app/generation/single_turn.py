@@ -25,6 +25,24 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from llama_index.core.schema import NodeWithScore
+from typing import Any, List, Optional
+
+class CompatibleChatOpenAI(ChatOpenAI):
+    """
+    OpenAI Chat model adapter that is compatible with strict OpenAI-compatible backends
+    like NVIDIA NIM, which reject new schema extensions such as 'max_completion_tokens'.
+    """
+    def _get_request_payload(
+        self, 
+        input_: Any, 
+        *, 
+        stop: Optional[List[str]] = None, 
+        **kwargs: Any
+    ) -> dict:
+        payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+        if "max_completion_tokens" in payload:
+            payload["max_tokens"] = payload.pop("max_completion_tokens")
+        return payload
 
 from app.config.settings import Settings
 from app.tracing.langfuse import LangfuseTracer, get_langfuse_callback, get_langfuse_client, get_safe_tracer
@@ -69,7 +87,7 @@ class SingleTurnGenerator:
             model=settings.nvidia_model,
             url=settings.nvidia_base_url,
         )
-        self.llm = ChatOpenAI(
+        self.llm = CompatibleChatOpenAI(
             api_key=settings.nvidia_api_key,
             base_url=settings.nvidia_base_url,
             model=settings.nvidia_model,
@@ -94,8 +112,7 @@ class SingleTurnGenerator:
             try:
                 client = get_langfuse_client()
                 logger.info("Attempting to fetch 'rag-qna-prompt' from Langfuse Prompt Registry...")
-                # Fetching prompt from Langfuse
-                langfuse_prompt = client.get_prompt("rag-qna-prompt")
+                langfuse_prompt = client.get_prompt("rag-qna-prompt", label="production")
                 
                 # In Langfuse v4 SDK, the returned prompt object has a direct conversion
                 # helper get_langchain_prompt() which compiles into a ChatPromptTemplate!

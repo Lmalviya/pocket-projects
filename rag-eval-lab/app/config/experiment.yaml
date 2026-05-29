@@ -16,8 +16,10 @@
 experiment_name: "fixed-dense-baseline-v1"
 
 model:
-  llm: "nvidia/llama-3.1-nemotron-nano-8b-instruct"
-  embedding: "bge-small-en-v1.5"          # served via Ollama locally
+  llm: "nvidia/llama-3.1-nemotron-nano-8b-v1"
+  embedding: "mxbai-embed-large"          # served via Ollama locally
+  embedding_dim: 1024
+  sparse_encoder: naver/splade-cocondenser-ensembledistil
 
 ingestion:
   chunking: fixed          # fixed | semantic | recursive | sentence

@@ -17,8 +17,10 @@ This is the master coordinator. When you run `python main.py`, the system:
      answers, listing retrieved node sources, and printing the Langfuse trace link!
 """
 
+import os
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+
 import sys
-import time
 from typing import Any
 from app.config.settings import get_settings
 from app.generation.multi_turn import MultiTurnGenerator
@@ -26,7 +28,9 @@ from app.generation.single_turn import SingleTurnGenerator
 from app.ingestion.chunking.base import ChunkingConfig
 from app.ingestion.chunking.factory import get_chunker
 from app.ingestion.indexing.dense import QdrantHybridIndexer
-from app.ingestion.loader import DocumentLoader
+# from app.ingestion.loader import DocumentLoader
+from app.ingestion.loader2 import DocumentLoader
+from app.ingestion.loader_helper import build_cache
 from app.pipeline.multi_turn import MultiTurnPipeline
 from app.pipeline.single_turn import SingleTurnPipeline
 from app.retrieval.dense import DenseRetriever
@@ -68,16 +72,29 @@ def bootstrap_database(settings: Any, config: Any, tracer: LangfuseTracer) -> An
         tracer=tracer,
     )
 
-    # Check if this isolated experiment collection already exists
-    if not indexer.client.collection_exists(indexer.collection_name):
-        logger.warning(
-            "Collection '{col}' not found in Qdrant! Automatically bootstrapping index...",
-            col=indexer.collection_name,
-        )
+    # Check if this isolated experiment collection already exists AND has data
+    collection_exists = indexer.client.collection_exists(indexer.collection_name)
+    collection_empty = False
+    if collection_exists:
+        info = indexer.client.get_collection(indexer.collection_name)
+        collection_empty = info.points_count == 0
+
+    if not collection_exists or collection_empty:
+        if collection_empty:
+            logger.warning(
+                "Collection '{col}' exists but is EMPTY (previous index run may have failed). Rebuilding...",
+                col=indexer.collection_name,
+            )
+        else:
+            logger.warning(
+                "Collection '{col}' not found in Qdrant! Automatically bootstrapping index...",
+                col=indexer.collection_name,
+            )
         
         # 1. Fetch raw Wikipedia docs aligned with selected Stage difficulty questions
+        # build_cache()
         loader = DocumentLoader(tracer=tracer)
-        documents, _ = loader.compile_hotpotqa_stage(stage=config.ingestion.stage)
+        documents, _ = loader.load_stage(config.ingestion.stage)
         
         # 2. Chunk documents using configured strategy
         logger.info("Initializing chunker strategy '{strategy}'...", strategy=config.ingestion.chunking)
@@ -91,7 +108,8 @@ def bootstrap_database(settings: Any, config: Any, tracer: LangfuseTracer) -> An
             tracer=tracer,
         )
         
-        nodes = chunker.chunk(documents)
+        chunker_result = chunker.chunk(documents)
+        nodes = chunker_result.nodes
         
         # 3. Embed and index nodes in Qdrant
         indexer.build_index(nodes, recreate=True)
@@ -108,6 +126,7 @@ def main() -> None:
     try:
         settings = get_settings()
         config = load_experiment_config(settings.experiment_config_path)
+        logger.info("Config: {config}", config=config)
     except Exception as init_err:
         print(f"\n❌ [Startup Error] Failed to load configurations:\n{str(init_err)}\n")
         sys.exit(1)
